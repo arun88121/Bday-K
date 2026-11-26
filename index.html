@@ -241,7 +241,7 @@
       background: rgba(255, 255, 255, 0.24);
     }
 
-    .preview-unlock-btn:inactive {
+    .preview-unlock-btn:active {
       transform: scale(0.96);
     }
 
@@ -1770,6 +1770,13 @@
        SINGLE EDITABLE CONFIGURATION (EDIT ALL TEXT & DATES HERE)
     ===================================================================== */
     const SITE_CONFIG = {
+      // ===================================================================
+      // EASY DEPLOYMENT SWITCH:
+      // Keep `true` while testing (shows the top-right "Preview Unlock" button).
+      // Change to `false` right before deploying so it ONLY opens at 12:00 AM!
+      // ===================================================================
+      enableTestPreview: true,
+
       // Her name / nickname
       herName: "Ammu",
 
@@ -1959,13 +1966,120 @@
       "use strict";
 
       /* =====================================================================
-         APPLY SITE_CONFIG TEXT TO DOM
+         HAPTIC FEEDBACK & CUTE UI SOUND EFFECTS ENGINE
+      ===================================================================== */
+      let audioCtx = null;
+
+      function ensureAudio() {
+        if (!audioCtx) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (Ctx) audioCtx = new Ctx();
+        }
+        if (audioCtx && audioCtx.state === "suspended") {
+          audioCtx.resume().catch(() => {});
+        }
+        return audioCtx;
+      }
+
+      function triggerHaptic(pattern = 15) {
+        if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+          try {
+            navigator.vibrate(pattern);
+          } catch (_) {}
+        }
+      }
+
+      function playCuteSound(type = "tap") {
+        const ctx = ensureAudio();
+        if (!ctx) return;
+        const now = ctx.currentTime;
+
+        const playChime = (freq, startOffset, duration, wave = "sine", peak = 0.08, slideTo = null) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = wave;
+          osc.frequency.setValueAtTime(freq, now + startOffset);
+          if (slideTo) {
+            osc.frequency.exponentialRampToValueAtTime(slideTo, now + startOffset + duration);
+          }
+          gain.gain.setValueAtTime(0.0001, now + startOffset);
+          gain.gain.exponentialRampToValueAtTime(peak, now + startOffset + 0.015);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + startOffset + duration);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + startOffset);
+          osc.stop(now + startOffset + duration + 0.01);
+        };
+
+        switch (type) {
+          case "kiss":
+            playChime(520, 0, 0.09, "sine", 0.09, 980);
+            playChime(880, 0.07, 0.14, "triangle", 0.07, 1320);
+            break;
+          case "pop":
+            playChime(320, 0, 0.08, "sine", 0.11, 760);
+            break;
+          case "sparkle":
+            playChime(784, 0, 0.14, "sine", 0.07);
+            playChime(1046.5, 0.06, 0.16, "sine", 0.07);
+            playChime(1318.5, 0.12, 0.22, "triangle", 0.06);
+            break;
+          case "gacha":
+            playChime(440, 0, 0.08, "triangle", 0.07);
+            playChime(554.37, 0.08, 0.08, "triangle", 0.07);
+            playChime(659.25, 0.16, 0.08, "triangle", 0.07);
+            playChime(880, 0.24, 0.2, "sine", 0.08);
+            break;
+          case "flip":
+            playChime(480, 0, 0.1, "sine", 0.06, 680);
+            break;
+          case "letter":
+            playChime(587.33, 0, 0.16, "triangle", 0.07);
+            playChime(880, 0.08, 0.26, "sine", 0.07);
+            break;
+          case "blow":
+            playChime(620, 0, 0.24, "sine", 0.07, 240);
+            break;
+          case "firework":
+            playChime(300, 0, 0.18, "sine", 0.08, 920);
+            playChime(1174.66, 0.16, 0.22, "triangle", 0.07);
+            playChime(1567.98, 0.22, 0.25, "sine", 0.06);
+            break;
+          case "unlock":
+            playChime(523.25, 0, 0.16, "triangle", 0.09);
+            playChime(659.25, 0.1, 0.16, "triangle", 0.09);
+            playChime(783.99, 0.2, 0.16, "triangle", 0.09);
+            playChime(1046.5, 0.3, 0.35, "sine", 0.1);
+            break;
+          default:
+            playChime(660, 0, 0.08, "sine", 0.06, 820);
+            break;
+        }
+      }
+
+      function feedback(soundType = "tap", hapticPattern = 15) {
+        triggerHaptic(hapticPattern);
+        playCuteSound(soundType);
+      }
+
+      /* =====================================================================
+         APPLY SITE_CONFIG TEXT & TEST PREVIEW TOGGLE TO DOM
       ===================================================================== */
       function applyConfigText() {
         document.title = `Happy Birthday, ${SITE_CONFIG.herName}`;
 
+        // Toggle Preview Unlock button based on SITE_CONFIG.enableTestPreview
+        const previewBtn = document.getElementById("previewUnlockBtn");
+        if (previewBtn) {
+          if (SITE_CONFIG.enableTestPreview) {
+            previewBtn.style.display = "inline-block";
+            previewBtn.textContent = SITE_CONFIG.lockScreen.previewButtonText;
+          } else {
+            previewBtn.remove();
+          }
+        }
+
         // Lock screen
-        document.getElementById("previewUnlockBtn").textContent = SITE_CONFIG.lockScreen.previewButtonText;
         document.getElementById("lockTag").textContent = SITE_CONFIG.lockScreen.tag;
         document.getElementById("lockTitle").textContent = SITE_CONFIG.lockScreen.title;
         document.getElementById("lockSubtitle").textContent = SITE_CONFIG.lockScreen.subtitle;
@@ -2062,7 +2176,14 @@
         setTimeout(() => burst.remove(), 880);
       }
 
+      let pendingAutoplaySong = false;
+
       document.addEventListener("pointerdown", (e) => {
+        ensureAudio();
+        if (pendingAutoplaySong && !playingSong) {
+          pendingAutoplaySong = false;
+          startSong();
+        }
         if (e.target && e.target.tagName === "CANVAS") return;
         createTapBurst(e.clientX, e.clientY);
       });
@@ -2110,7 +2231,16 @@
         }, 200);
       }
 
-      document.getElementById("celebrateBtn").addEventListener("click", fireCelebrationConfetti);
+      document.getElementById("celebrateBtn").addEventListener("click", () => {
+        feedback("sparkle", [20, 30, 20]);
+        fireCelebrationConfetti();
+      });
+
+      document.querySelectorAll(".dock-link").forEach((link) => {
+        link.addEventListener("click", () => {
+          feedback("tap", 12);
+        });
+      });
 
       /* =====================================================================
          TOP SCROLL PROGRESS RIBBON & BUDDY
@@ -2174,7 +2304,16 @@
         lockBadgePill.textContent = "🔓";
         lockScreen.classList.add("unlocked");
         document.body.classList.remove("is-locked");
+
+        feedback("unlock", [30, 40, 30, 50]);
         fireCelebrationConfetti();
+
+        // Automatically play the dreamy birthday song when unlocking at 12:00 AM
+        startSong();
+        if (audioCtx && audioCtx.state === "suspended") {
+          pendingAutoplaySong = true;
+        }
+
         setTimeout(() => {
           initAllScratchCards();
           updateScrollRibbon();
@@ -2203,6 +2342,7 @@
       }
 
       sendKissBtn.addEventListener("click", () => {
+        feedback("kiss", [18, 25, 18]);
         kissesSent++;
         kissCountLabel.textContent = `Kisses sent: ${kissesSent}`;
         const replies = SITE_CONFIG.lockScreen.kissReplies;
@@ -2214,7 +2354,9 @@
         lockBadgePill.classList.add("wiggle");
       });
 
-      previewUnlockBtn.addEventListener("click", unlockPage);
+      if (previewUnlockBtn && SITE_CONFIG.enableTestPreview) {
+        previewUnlockBtn.addEventListener("click", unlockPage);
+      }
 
       tickMidnightLock();
       setInterval(tickMidnightLock, 500);
@@ -2267,15 +2409,18 @@
       function blowOutCandles() {
         if (!candlesLit) return;
         candlesLit = false;
+        feedback("blow", [25, 35, 45]);
         flames.forEach((flame, idx) => {
           setTimeout(() => flame.classList.add("blown"), idx * 90);
         });
+        setTimeout(() => playCuteSound("sparkle"), 280);
         wishBanner.classList.add("active");
         fireCelebrationConfetti();
         stopMic();
       }
 
       function relightCandles() {
+        feedback("sparkle", 18);
         candlesLit = true;
         flames.forEach((flame) => flame.classList.remove("blown"));
         wishBanner.classList.remove("active");
@@ -2304,6 +2449,7 @@
       }
 
       micBlowBtn.addEventListener("click", async () => {
+        feedback("tap", 15);
         if (micStream) {
           stopMic();
           micStatus.textContent = "";
@@ -2421,6 +2567,7 @@
           ctx.fill();
 
           strokes++;
+          if (strokes % 6 === 0) triggerHaptic(8);
           if (strokes % 8 === 0) checkProgress();
         }
 
@@ -2435,6 +2582,7 @@
             if (cleared / total >= 0.45) {
               canvas.dataset.done = "true";
               canvas.classList.add("revealed");
+              feedback("sparkle", [25, 35, 25]);
               fireCelebrationConfetti();
             }
           } catch (_) {}
@@ -2442,6 +2590,7 @@
 
         canvas.onpointerdown = (e) => {
           drawing = true;
+          triggerHaptic(10);
           canvas.setPointerCapture(e.pointerId);
           scratchAt(getPoint(e));
         };
@@ -2465,7 +2614,10 @@
         document.querySelectorAll(".scratch-card").forEach(initScratchCard);
       }
 
-      document.getElementById("resetScratchBtn").addEventListener("click", initAllScratchCards);
+      document.getElementById("resetScratchBtn").addEventListener("click", () => {
+        feedback("tap", 15);
+        initAllScratchCards();
+      });
       window.addEventListener("resize", initAllScratchCards);
 
       /* =====================================================================
@@ -2488,6 +2640,7 @@
         if (spinningCapsule || list.length === 0) return;
         spinningCapsule = true;
 
+        feedback("gacha", [15, 30, 15, 30]);
         gachaCrankBtn.classList.add("turning");
         gachaMachine.classList.add("shaking");
 
@@ -2510,6 +2663,7 @@
             gachaShelf.appendChild(pill);
           }
 
+          feedback("sparkle", [25, 30, 25]);
           fireCelebrationConfetti();
           spinningCapsule = false;
         }, 460);
@@ -2552,10 +2706,12 @@
           btn.setAttribute("aria-label", `Pop balloon ${idx + 1}`);
 
           btn.addEventListener("click", () => {
+            feedback("pop", 25);
             poppedCount++;
             balloonStatus.textContent = `${poppedCount} / ${reasons.length} Balloons Popped`;
             cell.innerHTML = `<div class="balloon-reveal-msg">${reason}</div>`;
             if (poppedCount === reasons.length) {
+              setTimeout(() => feedback("sparkle", [25, 35, 25]), 120);
               fireCelebrationConfetti();
             }
           });
@@ -2566,7 +2722,10 @@
       }
 
       renderBalloons();
-      document.getElementById("refillBalloonsBtn").addEventListener("click", renderBalloons);
+      document.getElementById("refillBalloonsBtn").addEventListener("click", () => {
+        feedback("tap", 15);
+        renderBalloons();
+      });
 
       /* =====================================================================
          7. 3D POLAROID KEEPSAKES & MAGIC COMPLIMENT WAND
@@ -2597,6 +2756,7 @@
           `;
 
           function flipCard() {
+            feedback("flip", 16);
             card.classList.toggle("flipped");
           }
 
@@ -2617,6 +2777,7 @@
       let complimentIdx = 0;
       const complimentText = document.getElementById("complimentText");
       document.getElementById("wandBtn").addEventListener("click", () => {
+        feedback("sparkle", [15, 25, 15]);
         const list = SITE_CONFIG.polaroids.compliments;
         if (list.length === 0) return;
         complimentIdx = (complimentIdx + 1) % list.length;
@@ -2636,6 +2797,7 @@
         const wishes = SITE_CONFIG.starJar.wishes;
         if (wishes.length === 0) return;
 
+        feedback("sparkle", [16, 24, 16]);
         starJarVisual.classList.remove("shaking");
         void starJarVisual.offsetWidth;
         starJarVisual.classList.add("shaking");
@@ -2680,6 +2842,7 @@
           `;
 
           function openThisLetter() {
+            feedback("letter", [20, 30, 20]);
             box.classList.add("opened");
             modalBadge.textContent = letter.badge;
             modalTitle.textContent = letter.title;
@@ -2704,6 +2867,7 @@
       renderEnvelopes();
 
       function closeModal() {
+        feedback("tap", 12);
         letterModal.classList.remove("open");
         letterModal.setAttribute("aria-hidden", "true");
       }
@@ -2788,6 +2952,7 @@
         fireCelebrationConfetti();
         for (let i = 0; i < 6; i++) {
           setTimeout(() => {
+            feedback("firework", [25, 30, 35]);
             burstFirework(
               fwCanvas.width * (0.2 + Math.random() * 0.6),
               fwCanvas.height * (0.2 + Math.random() * 0.35)
@@ -2797,63 +2962,84 @@
       });
 
       /* =====================================================================
-         11. WEB AUDIO API BIRTHDAY MELODY PLAYER
+         11. DREAMY CELESTA & MUSIC BOX BIRTHDAY SONG PLAYER (AUTO AT 12 AM)
       ===================================================================== */
       const musicToggleBtn = document.getElementById("musicToggleBtn");
       const musicBtnLabel = document.getElementById("musicBtnLabel");
-      let audioCtx = null;
       let playingSong = false;
       let songTimer = null;
 
+      // Dreamy Music Box Melody in F Major + Warm Harmony
       const songNotes = [
-        [261.63, 0.75], [261.63, 0.25], [293.66, 1.0], [261.63, 1.0], [349.23, 1.0], [329.63, 2.0],
-        [261.63, 0.75], [261.63, 0.25], [293.66, 1.0], [261.63, 1.0], [392.00, 1.0], [349.23, 2.0],
-        [261.63, 0.75], [261.63, 0.25], [523.25, 1.0], [440.00, 1.0], [349.23, 1.0], [329.63, 1.0], [293.66, 2.0],
-        [466.16, 0.75], [466.16, 0.25], [440.00, 1.0], [349.23, 1.0], [392.00, 1.0], [349.23, 2.2]
+        [261.63, 0.75, 174.61], [261.63, 0.25, null], [293.66, 1.0, 220.00], [261.63, 1.0, 261.63], [349.23, 1.0, 220.00], [329.63, 2.0, 174.61],
+        [261.63, 0.75, 130.81], [261.63, 0.25, null], [293.66, 1.0, 196.00], [261.63, 1.0, 261.63], [392.00, 1.0, 196.00], [349.23, 2.0, 174.61],
+        [261.63, 0.75, 174.61], [261.63, 0.25, null], [523.25, 1.0, 261.63], [440.00, 1.0, 349.23], [349.23, 1.0, 220.00], [329.63, 1.0, 196.00], [293.66, 2.0, 233.08],
+        [466.16, 0.75, 233.08], [466.16, 0.25, null], [440.00, 1.0, 220.00], [349.23, 1.0, 174.61], [392.00, 1.0, 196.00], [349.23, 2.4, 174.61]
       ];
 
-      function ensureAudio() {
-        if (!audioCtx) {
-          const Ctx = window.AudioContext || window.webkitAudioContext;
-          if (Ctx) audioCtx = new Ctx();
-        }
-        if (audioCtx && audioCtx.state === "suspended") {
-          audioCtx.resume().catch(() => {});
-        }
-        return audioCtx;
-      }
+      function playMusicBoxNote(ctx, freq, start, dur, harmonyFreq) {
+        const mainOsc = ctx.createOscillator();
+        const overtoneOsc = ctx.createOscillator();
+        const mainGain = ctx.createGain();
+        const overtoneGain = ctx.createGain();
 
-      function playTone(ctx, freq, start, dur) {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(freq, start);
-        gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.14, start + 0.03);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + dur * 0.95);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(start);
-        osc.stop(start + dur);
+        mainOsc.type = "triangle";
+        mainOsc.frequency.setValueAtTime(freq, start);
+
+        overtoneOsc.type = "sine";
+        overtoneOsc.frequency.setValueAtTime(freq * 2, start);
+
+        mainGain.gain.setValueAtTime(0.0001, start);
+        mainGain.gain.exponentialRampToValueAtTime(0.11, start + 0.02);
+        mainGain.gain.exponentialRampToValueAtTime(0.0001, start + dur * 1.15);
+
+        overtoneGain.gain.setValueAtTime(0.0001, start);
+        overtoneGain.gain.exponentialRampToValueAtTime(0.032, start + 0.015);
+        overtoneGain.gain.exponentialRampToValueAtTime(0.0001, start + dur * 0.75);
+
+        mainOsc.connect(mainGain);
+        overtoneOsc.connect(overtoneGain);
+        mainGain.connect(ctx.destination);
+        overtoneGain.connect(ctx.destination);
+
+        mainOsc.start(start);
+        overtoneOsc.start(start);
+        mainOsc.stop(start + dur * 1.2);
+        overtoneOsc.stop(start + dur * 0.8);
+
+        if (harmonyFreq) {
+          const bassOsc = ctx.createOscillator();
+          const bassGain = ctx.createGain();
+          bassOsc.type = "sine";
+          bassOsc.frequency.setValueAtTime(harmonyFreq, start);
+          bassGain.gain.setValueAtTime(0.0001, start);
+          bassGain.gain.exponentialRampToValueAtTime(0.055, start + 0.05);
+          bassGain.gain.exponentialRampToValueAtTime(0.0001, start + dur * 1.3);
+          bassOsc.connect(bassGain);
+          bassGain.connect(ctx.destination);
+          bassOsc.start(start);
+          bassOsc.stop(start + dur * 1.35);
+        }
       }
 
       function runSongLoop() {
         const ctx = ensureAudio();
         if (!playingSong || !ctx) return;
 
-        const beat = 0.42;
-        let t = ctx.currentTime + 0.05;
-        songNotes.forEach(([freq, beats]) => {
+        const beat = 0.44;
+        let t = ctx.currentTime + 0.06;
+        songNotes.forEach(([freq, beats, harmonyFreq]) => {
           const d = beats * beat;
-          playTone(ctx, freq, t, d);
+          playMusicBoxNote(ctx, freq, t, d, harmonyFreq);
           t += d;
         });
 
-        songTimer = setTimeout(runSongLoop, (t - ctx.currentTime + 0.6) * 1000);
+        songTimer = setTimeout(runSongLoop, (t - ctx.currentTime + 0.8) * 1000);
       }
 
       function startSong() {
         ensureAudio();
+        if (playingSong) return;
         playingSong = true;
         musicToggleBtn.classList.add("playing");
         musicToggleBtn.setAttribute("aria-pressed", "true");
@@ -2863,6 +3049,7 @@
 
       function stopSong() {
         playingSong = false;
+        pendingAutoplaySong = false;
         if (songTimer) {
           clearTimeout(songTimer);
           songTimer = null;
@@ -2873,6 +3060,7 @@
       }
 
       musicToggleBtn.addEventListener("click", () => {
+        triggerHaptic(15);
         if (playingSong) stopSong();
         else startSong();
       });
