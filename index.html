@@ -2179,10 +2179,13 @@
       let pendingAutoplaySong = false;
 
       document.addEventListener("pointerdown", (e) => {
-        ensureAudio();
-        if (pendingAutoplaySong && !playingSong) {
+        const ctx = ensureAudio();
+        if (e.target && e.target.closest && e.target.closest("#musicToggleBtn")) {
+          return;
+        }
+        if (pendingAutoplaySong && playingSong && ctx && ctx.state === "running") {
           pendingAutoplaySong = false;
-          startSong();
+          runSongLoop(songRunId);
         }
         if (e.target && e.target.tagName === "CANVAS") return;
         createTapBurst(e.clientX, e.clientY);
@@ -2310,9 +2313,6 @@
 
         // Automatically play the dreamy birthday song when unlocking at 12:00 AM
         startSong();
-        if (audioCtx && audioCtx.state === "suspended") {
-          pendingAutoplaySong = true;
-        }
 
         setTimeout(() => {
           initAllScratchCards();
@@ -2962,12 +2962,15 @@
       });
 
       /* =====================================================================
-         11. DREAMY CELESTA & MUSIC BOX BIRTHDAY SONG PLAYER (AUTO AT 12 AM)
+         11. DREAMY CELESTA & MUSIC BOX BIRTHDAY SONG PLAYER (SINGLE INSTANCE)
       ===================================================================== */
       const musicToggleBtn = document.getElementById("musicToggleBtn");
       const musicBtnLabel = document.getElementById("musicBtnLabel");
       let playingSong = false;
       let songTimer = null;
+      let songRunId = 0;
+      let songMasterGain = null;
+      let activeSongOscillators = [];
 
       // Dreamy Music Box Melody in F Major + Warm Harmony
       const songNotes = [
@@ -2977,7 +2980,27 @@
         [466.16, 0.75, 233.08], [466.16, 0.25, null], [440.00, 1.0, 220.00], [349.23, 1.0, 174.61], [392.00, 1.0, 196.00], [349.23, 2.4, 174.61]
       ];
 
-      function playMusicBoxNote(ctx, freq, start, dur, harmonyFreq) {
+      function clearActiveSongNodes() {
+        if (songTimer) {
+          clearTimeout(songTimer);
+          songTimer = null;
+        }
+        activeSongOscillators.forEach((osc) => {
+          try {
+            osc.stop();
+            osc.disconnect();
+          } catch (_) {}
+        });
+        activeSongOscillators = [];
+        if (songMasterGain) {
+          try {
+            songMasterGain.disconnect();
+          } catch (_) {}
+          songMasterGain = null;
+        }
+      }
+
+      function playMusicBoxNote(ctx, dest, freq, start, dur, harmonyFreq) {
         const mainOsc = ctx.createOscillator();
         const overtoneOsc = ctx.createOscillator();
         const mainGain = ctx.createGain();
@@ -2999,13 +3022,14 @@
 
         mainOsc.connect(mainGain);
         overtoneOsc.connect(overtoneGain);
-        mainGain.connect(ctx.destination);
-        overtoneGain.connect(ctx.destination);
+        mainGain.connect(dest);
+        overtoneGain.connect(dest);
 
         mainOsc.start(start);
         overtoneOsc.start(start);
         mainOsc.stop(start + dur * 1.2);
         overtoneOsc.stop(start + dur * 0.8);
+        activeSongOscillators.push(mainOsc, overtoneOsc);
 
         if (harmonyFreq) {
           const bassOsc = ctx.createOscillator();
@@ -3016,50 +3040,76 @@
           bassGain.gain.exponentialRampToValueAtTime(0.055, start + 0.05);
           bassGain.gain.exponentialRampToValueAtTime(0.0001, start + dur * 1.3);
           bassOsc.connect(bassGain);
-          bassGain.connect(ctx.destination);
+          bassGain.connect(dest);
           bassOsc.start(start);
           bassOsc.stop(start + dur * 1.35);
+          activeSongOscillators.push(bassOsc);
         }
       }
 
-      function runSongLoop() {
+      function runSongLoop(runId) {
         const ctx = ensureAudio();
-        if (!playingSong || !ctx) return;
+        if (!playingSong || runId !== songRunId || !ctx) return;
+
+        // If browser blocked autoplay until user gesture, wait until unlocked/resumed
+        if (ctx.state !== "running") {
+          pendingAutoplaySong = true;
+          return;
+        }
+
+        clearActiveSongNodes();
+        songMasterGain = ctx.createGain();
+        songMasterGain.gain.setValueAtTime(1, ctx.currentTime);
+        songMasterGain.connect(ctx.destination);
 
         const beat = 0.44;
         let t = ctx.currentTime + 0.06;
         songNotes.forEach(([freq, beats, harmonyFreq]) => {
           const d = beats * beat;
-          playMusicBoxNote(ctx, freq, t, d, harmonyFreq);
+          playMusicBoxNote(ctx, songMasterGain, freq, t, d, harmonyFreq);
           t += d;
         });
 
-        songTimer = setTimeout(runSongLoop, (t - ctx.currentTime + 0.8) * 1000);
+        songTimer = setTimeout(() => runSongLoop(runId), (t - ctx.currentTime + 0.8) * 1000);
       }
 
       function startSong() {
-        ensureAudio();
-        if (playingSong) return;
+        const ctx = ensureAudio();
+        if (!ctx) return;
+        songRunId++;
+        const currentRun = songRunId;
+        clearActiveSongNodes();
         playingSong = true;
         musicToggleBtn.classList.add("playing");
         musicToggleBtn.setAttribute("aria-pressed", "true");
         musicBtnLabel.textContent = "Pause";
-        runSongLoop();
+
+        if (ctx.state === "running") {
+          pendingAutoplaySong = false;
+          runSongLoop(currentRun);
+        } else {
+          pendingAutoplaySong = true;
+          ctx.resume().then(() => {
+            if (playingSong && currentRun === songRunId && ctx.state === "running") {
+              pendingAutoplaySong = false;
+              runSongLoop(currentRun);
+            }
+          }).catch(() => {});
+        }
       }
 
       function stopSong() {
+        songRunId++;
         playingSong = false;
         pendingAutoplaySong = false;
-        if (songTimer) {
-          clearTimeout(songTimer);
-          songTimer = null;
-        }
+        clearActiveSongNodes();
         musicToggleBtn.classList.remove("playing");
         musicToggleBtn.setAttribute("aria-pressed", "false");
         musicBtnLabel.textContent = "Play Song";
       }
 
-      musicToggleBtn.addEventListener("click", () => {
+      musicToggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
         triggerHaptic(15);
         if (playingSong) stopSong();
         else startSong();
